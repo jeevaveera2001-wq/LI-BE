@@ -18,7 +18,7 @@ function hashPassword(password) {
 // Helper: Create Gmail SMTP transporter if credentials are provided in env or default
 const createMailTransporter = () => {
   const user = (process.env.GMAIL_USER || 'livetournaments.in@gmail.com').trim();
-  const pass = (process.env.GMAIL_APP_PASSWORD || 'kukpqwumdpgrfgce').trim().replace(/\s+/g, ''); // remove spaces from 16-char app password
+  const pass = (process.env.GMAIL_APP_PASSWORD || 'ngdrnjgwbjfglfga').trim().replace(/\s+/g, ''); // remove spaces from 16-char app password
 
   if (!user || !pass) {
     return null;

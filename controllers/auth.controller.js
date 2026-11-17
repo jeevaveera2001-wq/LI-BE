@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import nodemailer from 'nodemailer';
 import { connectToDatabase } from '../config/db.js';
 
 const ADMIN_USERNAME = 'admin';
@@ -14,6 +15,24 @@ function hashPassword(password) {
   return crypto.createHash('sha256').update(password + PASSWORD_SALT).digest('hex');
 }
 
+// Helper: Create Gmail SMTP transporter if credentials are provided in env
+const createMailTransporter = () => {
+  const user = process.env.GMAIL_USER;
+  const pass = process.env.GMAIL_APP_PASSWORD;
+
+  if (!user || !pass) {
+    return null;
+  }
+
+  return nodemailer.createTransport({
+    service: 'gmail',
+    auth: {
+      user: user.trim(),
+      pass: pass.trim().replace(/\s+/g, '') // remove spaces from 16-char app password
+    }
+  });
+};
+
 export const sendOtp = async (req, res) => {
   try {
     const { email } = req.body || {};
@@ -27,12 +46,72 @@ export const sendOtp = async (req, res) => {
 
     activeOtps.set(cleanEmail, { otp, expiry });
 
-    console.log(` [Auth API] Generated OTP ${otp} for ${cleanEmail}`);
+    console.log(`[Auth API] Generated Google verification code G-${otp} for ${cleanEmail}`);
+
+    // If Gmail credentials are set, dispatch real email via Gmail SMTP
+    const transporter = createMailTransporter();
+    let emailSent = false;
+    let emailError = null;
+
+    if (transporter) {
+      try {
+        await transporter.sendMail({
+          from: `"Live Tournaments Verification" <${process.env.GMAIL_USER}>`,
+          to: cleanEmail,
+          subject: `${otp} is your Live Tournaments Google verification code`,
+          html: `
+            <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; max-width: 520px; margin: 0 auto; padding: 32px 24px; border: 1px solid #e2e8f0; border-radius: 20px; background-color: #ffffff; color: #0f172a;">
+              <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 24px;">
+                <h2 style="margin: 0; font-size: 20px; font-weight: 900; letter-spacing: -0.5px; color: #0f172a;">
+                  LIVE TOURNAMENTS<span style="color: #f59e0b;">.IN</span>
+                </h2>
+              </div>
+              
+              <p style="font-size: 15px; color: #334155; line-height: 1.6; margin-bottom: 20px;">
+                Hello,
+              </p>
+              <p style="font-size: 14px; color: #475569; line-height: 1.6; margin-bottom: 24px;">
+                Use the following Google verification code to complete your registration on <strong>Live Tournaments</strong>:
+              </p>
+
+              <div style="background-color: #f8fafc; border: 2px dashed #cbd5e1; border-radius: 16px; padding: 24px; text-align: center; margin: 24px 0;">
+                <div style="font-size: 11px; font-weight: 800; color: #64748b; text-transform: uppercase; letter-spacing: 1.5px; margin-bottom: 8px;">
+                  Google Verification Code
+                </div>
+                <div style="font-size: 36px; font-weight: 900; letter-spacing: 6px; font-family: monospace; color: #0f172a; margin: 4px 0;">
+                  G-${otp}
+                </div>
+                <div style="font-size: 12px; color: #94a3b8; margin-top: 8px;">
+                  Enter <strong>${otp}</strong> or <strong>G-${otp}</strong> in the portal
+                </div>
+              </div>
+
+              <p style="font-size: 12px; color: #64748b; line-height: 1.5; margin-bottom: 24px;">
+                This code expires in <strong>10 minutes</strong>. If you did not initiate this registration, no further action is required.
+              </p>
+
+              <hr style="border: none; border-top: 1px solid #e2e8f0; margin: 24px 0;" />
+              
+              <div style="font-size: 11px; color: #94a3b8; text-align: center; line-height: 1.4;">
+                © ${new Date().getFullYear()} Live tournaments.in. Official Competitive BGMI Esports Portal.
+              </div>
+            </div>
+          `
+        });
+        emailSent = true;
+        console.log(`[Auth API] Successfully dispatched Google verification code to ${cleanEmail}`);
+      } catch (err) {
+        console.error('[Auth API] Gmail SMTP dispatch error:', err);
+        emailError = err.message;
+      }
+    }
 
     return res.status(200).json({
       success: true,
-      message: 'OTP sent successfully',
+      message: emailSent ? 'Google verification code dispatched to your email' : 'OTP generated successfully',
       email: cleanEmail,
+      emailSent,
+      emailError,
       otp // Provided for testing / friction-free UX
     });
   } catch (error) {

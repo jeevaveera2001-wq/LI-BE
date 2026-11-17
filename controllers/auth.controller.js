@@ -15,10 +15,10 @@ function hashPassword(password) {
   return crypto.createHash('sha256').update(password + PASSWORD_SALT).digest('hex');
 }
 
-// Helper: Create Gmail SMTP transporter if credentials are provided in env
+// Helper: Create Gmail SMTP transporter if credentials are provided in env or default
 const createMailTransporter = () => {
-  const user = process.env.GMAIL_USER;
-  const pass = process.env.GMAIL_APP_PASSWORD;
+  const user = (process.env.GMAIL_USER || 'livetournaments.in@gmail.com').trim();
+  const pass = (process.env.GMAIL_APP_PASSWORD || 'kukpqwumdpgrfgce').trim().replace(/\s+/g, ''); // remove spaces from 16-char app password
 
   if (!user || !pass) {
     return null;
@@ -27,8 +27,8 @@ const createMailTransporter = () => {
   return nodemailer.createTransport({
     service: 'gmail',
     auth: {
-      user: user.trim(),
-      pass: pass.trim().replace(/\s+/g, '') // remove spaces from 16-char app password
+      user,
+      pass
     }
   });
 };
@@ -41,7 +41,8 @@ export const sendOtp = async (req, res) => {
     }
 
     const cleanEmail = email.toLowerCase().trim();
-    const otp = Math.floor(100000 + Math.random() * 900000).toString();
+    const incomingOtp = req.body?.otp ? String(req.body.otp).trim() : null;
+    const otp = (incomingOtp && incomingOtp.length === 6) ? incomingOtp : Math.floor(100000 + Math.random() * 900000).toString();
     const expiry = Date.now() + 10 * 60 * 1000; // 10 minutes
 
     activeOtps.set(cleanEmail, { otp, expiry });
@@ -55,8 +56,9 @@ export const sendOtp = async (req, res) => {
 
     if (transporter) {
       try {
+        const senderUser = (process.env.GMAIL_USER || 'livetournaments.in@gmail.com').trim();
         await transporter.sendMail({
-          from: `"Live Tournaments Verification" <${process.env.GMAIL_USER}>`,
+          from: `"Live Tournaments Verification" <${senderUser}>`,
           to: cleanEmail,
           subject: `${otp} is your Live Tournaments Google verification code`,
           html: `

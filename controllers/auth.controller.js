@@ -57,73 +57,42 @@ export const sendOtp = async (req, res) => {
 
     activeOtps.set(cleanEmail, { otp, expiry });
 
-    console.log(`[Auth API] Generated Google verification code G-${otp} for ${cleanEmail} (purpose: ${isReset ? 'reset' : 'registration'})`);
-
-    // If Gmail credentials are set, dispatch real email via Gmail SMTP (port 587)
-    const transporter = createMailTransporter();
-    const senderUser = (process.env.GMAIL_USER || 'livetournaments.in@gmail.com').trim();
-    const actionLabel = isReset ? 'password reset' : 'registration';
-    const subjectLine = isReset 
-      ? `${otp} is your Live Tournaments Password Reset Code`
-      : `${otp} is your Live Tournaments Google verification code`;
-
-    const mailOptions = {
-      from: `"Live Tournaments Verification" <${senderUser}>`,
-      to: cleanEmail,
-      subject: subjectLine,
-      html: `
-        <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; max-width: 520px; margin: 0 auto; padding: 32px 24px; border: 1px solid #e2e8f0; border-radius: 20px; background-color: #ffffff; color: #0f172a;">
-          <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 24px;">
-            <h2 style="margin: 0; font-size: 20px; font-weight: 900; letter-spacing: -0.5px; color: #0f172a;">
-              LIVE TOURNAMENTS<span style="color: #f59e0b;">.IN</span>
-            </h2>
-          </div>
-          
-          <p style="font-size: 15px; color: #334155; line-height: 1.6; margin-bottom: 20px;">
-            Hello,
-          </p>
-          <p style="font-size: 14px; color: #475569; line-height: 1.6; margin-bottom: 24px;">
-            Use the following Google verification code to complete your <strong>${actionLabel}</strong> on <strong>Live Tournaments</strong>:
-          </p>
-
-          <div style="background-color: #f8fafc; border: 2px dashed #cbd5e1; border-radius: 16px; padding: 24px; text-align: center; margin: 24px 0;">
-            <div style="font-size: 11px; font-weight: 800; color: #64748b; text-transform: uppercase; letter-spacing: 1.5px; margin-bottom: 8px;">
-              Google Verification Code
-            </div>
-            <div style="font-size: 36px; font-weight: 900; letter-spacing: 6px; font-family: monospace; color: #0f172a; margin: 4px 0;">
-              G-${otp}
-            </div>
-            <div style="font-size: 12px; color: #94a3b8; margin-top: 8px;">
-              Enter <strong>${otp}</strong> or <strong>G-${otp}</strong> in the portal
-            </div>
-          </div>
-
-          <p style="font-size: 12px; color: #64748b; line-height: 1.5; margin-bottom: 24px;">
-            This code expires in <strong>10 minutes</strong>. If you did not initiate this request, no further action is required.
-          </p>
-
-          <hr style="border: none; border-top: 1px solid #e2e8f0; margin: 24px 0;" />
-          
-          <div style="font-size: 11px; color: #94a3b8; text-align: center; line-height: 1.4;">
-            © ${new Date().getFullYear()} Live tournaments.in. Official Competitive BGMI Esports Portal.
-          </div>
-        </div>
-      `
-    };
-
-    if (transporter) {
-      // Dispatch immediately and asynchronously in background - NEVER block the HTTP response
-      transporter.sendMail(mailOptions)
-        .then((info) => {
-          console.log(`[Auth API] Successfully dispatched Google verification code to ${cleanEmail}, Msg ID: ${info?.messageId}`);
-        })
-        .catch((err) => {
-          console.error(`[Auth API] Gmail SMTP dispatch error for ${cleanEmail}:`, err?.message || err);
-        });
+    // Store in MongoDB Atlas so it is globally available across Vercel and Render
+    try {
+      const { db } = await connectToDatabase();
+      await db.collection('otps').updateOne(
+        { email: cleanEmail },
+        { $set: { email: cleanEmail, otp, expiry, updatedAt: new Date() } },
+        { upsert: true }
+      );
+    } catch (dbErr) {
+      console.warn('[Auth API] MongoDB OTP write warning:', dbErr.message);
     }
 
+    console.log(`[Auth API] Generated Google verification code G-${otp} for ${cleanEmail} (purpose: ${isReset ? 'reset' : 'registration'})`);
+
+    // Dispatch email via HTTPS (port 443) relay to guarantee delivery on cloud containers (Render blocks raw SMTP ports 25, 465, 587)
+    fetch('https://dist-five-phi-17.vercel.app/api/auth/send-otp', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: cleanEmail, purpose })
+    })
+      .then(r => r.json())
+      .then(d => console.log('[Auth API] Dispatched via HTTPS email service:', d?.success))
+      .catch(err => {
+        console.warn('[Auth API] HTTPS dispatch fallback, trying direct SMTP:', err.message);
+        const transporter = createMailTransporter();
+        if (transporter) {
+          transporter.sendMail({
+            from: `"Live Tournaments Verification" <${process.env.GMAIL_USER || 'livetournaments.in@gmail.com'}>`,
+            to: cleanEmail,
+            subject: isReset ? `${otp} is your Password Reset Code` : `${otp} is your Google verification code`,
+            text: `Your verification code is: ${otp}`
+          }).catch(smtpErr => console.error('[Auth API] Direct SMTP error:', smtpErr.message));
+        }
+      });
+
     // Return instant HTTP 200 response (< 50ms) to ensure lightning-fast UI responsiveness
-    // Note: otp is NOT included in response - verification is strictly via the email inbox
     return res.status(200).json({
       success: true,
       message: 'Google verification code dispatched to your email',
@@ -143,8 +112,29 @@ export const verifyOtp = async (req, res) => {
     }
 
     const cleanEmail = email.toLowerCase().trim();
-    const record = activeOtps.get(cleanEmail);
+    const cleanOtp = String(otp).replace(/\D/g, '').trim();
 
+    // 1. Check MongoDB Atlas record
+    try {
+      const { db } = await connectToDatabase();
+      const mongoRecord = await db.collection('otps').findOne({ email: cleanEmail });
+      if (mongoRecord) {
+        if (Date.now() > mongoRecord.expiry) {
+          await db.collection('otps').deleteOne({ email: cleanEmail });
+          return res.status(400).json({ success: false, error: 'OTP has expired. Please request a new one.' });
+        }
+        if (mongoRecord.otp === cleanOtp) {
+          await db.collection('otps').deleteOne({ email: cleanEmail });
+          activeOtps.delete(cleanEmail);
+          return res.status(200).json({ success: true, message: 'Email verified successfully' });
+        }
+      }
+    } catch (e) {
+      console.warn('[Auth API] MongoDB OTP check warning:', e.message);
+    }
+
+    // 2. Check in-memory record fallback
+    const record = activeOtps.get(cleanEmail);
     if (!record) {
       return res.status(400).json({ success: false, error: 'No OTP requested for this email' });
     }
@@ -154,7 +144,7 @@ export const verifyOtp = async (req, res) => {
       return res.status(400).json({ success: false, error: 'OTP has expired. Please request a new one.' });
     }
 
-    if (record.otp !== otp.toString().trim()) {
+    if (record.otp !== cleanOtp) {
       return res.status(400).json({ success: false, error: 'Invalid verification code' });
     }
 

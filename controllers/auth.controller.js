@@ -18,23 +18,21 @@ function hashPassword(password) {
 // Helper: Create Gmail SMTP transporter if credentials are provided in env or default
 const createMailTransporter = () => {
   const user = (process.env.GMAIL_USER || 'livetournaments.in@gmail.com').trim();
-  const pass = (process.env.GMAIL_APP_PASSWORD || 'ngdrnjgwbjfglfga').trim().replace(/\s+/g, ''); // remove spaces from 16-char app password
+  const pass = (process.env.GMAIL_APP_PASSWORD || 'ngdrnjgwbjfglfga').trim().replace(/\s+/g, '');
 
   if (!user || !pass) {
     return null;
   }
 
   return nodemailer.createTransport({
-    host: 'smtp.gmail.com',
-    port: 465,
-    secure: true,
+    service: 'gmail',
     auth: {
       user,
       pass
     },
-    connectionTimeout: 12000,
-    greetingTimeout: 12000,
-    socketTimeout: 15000
+    tls: {
+      rejectUnauthorized: false
+    }
   });
 };
 

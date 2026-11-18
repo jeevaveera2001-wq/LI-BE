@@ -5,6 +5,7 @@ import authRoutes from './routes/auth.routes.js';
 import registrationsRoutes from './routes/registrations.routes.js';
 import inquiriesRoutes from './routes/inquiries.routes.js';
 import sponsorsRoutes from './routes/sponsors.routes.js';
+import tournamentsRoutes, { gamesList, newsList } from './routes/tournaments.routes.js';
 import { sendOtp } from './controllers/auth.controller.js';
 import { connectToDatabase } from './config/db.js';
 
@@ -38,6 +39,9 @@ app.use('/api/auth', authRoutes);
 app.use('/api/registrations', registrationsRoutes);
 app.use('/api/inquiries', inquiriesRoutes);
 app.use('/api/sponsors', sponsorsRoutes);
+app.use('/api/tournaments', tournamentsRoutes);
+app.get('/api/games', (req, res) => res.json(gamesList));
+app.get('/api/news', (req, res) => res.json(newsList));
 
 // Top-level aliases for direct frontend client calls
 app.post('/api/send-otp', sendOtp);

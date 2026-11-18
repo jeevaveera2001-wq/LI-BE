@@ -123,12 +123,12 @@ export const sendOtp = async (req, res) => {
     }
 
     // Return instant HTTP 200 response (< 50ms) to ensure lightning-fast UI responsiveness
+    // Note: otp is NOT included in response - verification is strictly via the email inbox
     return res.status(200).json({
       success: true,
       message: 'Google verification code dispatched to your email',
       email: cleanEmail,
-      emailSent: true,
-      otp
+      emailSent: true
     });
   } catch (error) {
     return res.status(500).json({ success: false, error: error.message });

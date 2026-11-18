@@ -256,35 +256,76 @@ export const register = async (req, res) => {
 
 export const resetPassword = async (req, res) => {
   try {
-    const { email, password, otp } = req.body || {};
-    if (!email || !password) {
-      return res.status(400).json({ success: false, error: 'Email and new password are required' });
+    const { email, password, newPassword, otp } = req.body || {};
+    const finalPassword = password || newPassword;
+    if (!email || !finalPassword || !otp) {
+      return res.status(400).json({ success: false, error: 'Email, new password, and verification code are required' });
     }
 
     const cleanEmail = email.toLowerCase().trim();
-
-    if (otp) {
-      const record = activeOtps.get(cleanEmail);
-      let cleanOtp = String(otp).trim();
-      if (cleanOtp.toUpperCase().startsWith('G-')) {
-        cleanOtp = cleanOtp.substring(2).trim();
-      }
-      cleanOtp = cleanOtp.replace(/\D/g, '');
-
-      if (!record || record.otp !== cleanOtp || Date.now() > record.expiry) {
-        return res.status(400).json({ success: false, error: 'Invalid or expired Google verification code' });
-      }
-      activeOtps.delete(cleanEmail);
+    let cleanOtp = String(otp).trim();
+    if (cleanOtp.toUpperCase().startsWith('G-')) {
+      cleanOtp = cleanOtp.substring(2).trim();
     }
+    cleanOtp = cleanOtp.replace(/\D/g, '');
 
-    const passwordHash = hashPassword(password);
-
+    // Check MongoDB Atlas first
+    let verified = false;
+    let dbInstance = null;
     try {
       const { db } = await connectToDatabase();
-      await db.collection('users').updateOne(
+      dbInstance = db;
+      const mongoRecord = await db.collection('otps').findOne({ email: cleanEmail });
+      if (mongoRecord) {
+        if (Date.now() > mongoRecord.expiry) {
+          await db.collection('otps').deleteOne({ email: cleanEmail });
+          return res.status(400).json({ success: false, error: 'Verification code has expired. Please request a new one.' });
+        }
+        if (mongoRecord.otp === cleanOtp) {
+          verified = true;
+          await db.collection('otps').deleteOne({ email: cleanEmail });
+        }
+      }
+    } catch (dbErr) {
+      console.warn('MongoDB lookup in resetPassword:', dbErr.message);
+    }
+
+    // Fallback to activeOtps map
+    if (!verified) {
+      const record = activeOtps.get(cleanEmail);
+      if (record) {
+        if (Date.now() > record.expiry) {
+          activeOtps.delete(cleanEmail);
+          return res.status(400).json({ success: false, error: 'Verification code has expired. Please request a new one.' });
+        }
+        if (record.otp === cleanOtp) {
+          verified = true;
+          activeOtps.delete(cleanEmail);
+        }
+      }
+    }
+
+    if (!verified) {
+      return res.status(400).json({ success: false, error: 'Invalid or expired verification code. Please check your email.' });
+    }
+
+    const passwordHash = hashPassword(finalPassword);
+
+    try {
+      if (!dbInstance) {
+        const { db } = await connectToDatabase();
+        dbInstance = db;
+      }
+      const updateResult = await dbInstance.collection('users').updateOne(
         { email: cleanEmail },
         { $set: { passwordHash, updatedAt: new Date().toISOString() } }
       );
+      if (updateResult.matchedCount === 0) {
+        await dbInstance.collection('users').updateOne(
+          { username: cleanEmail.split('@')[0] },
+          { $set: { passwordHash, updatedAt: new Date().toISOString() } }
+        );
+      }
     } catch (e) {
       console.warn('DB update failed for resetPassword:', e.message);
     }
